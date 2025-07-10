@@ -44,7 +44,6 @@ Optional:
 - **Why**:
   - Native plugin support for **Elasticsearch input** and **Kafka output**
   - Low-setup, reliable batch-to-stream converter
-  - Transform fields (e.g., extract `createdDateTime`) inline before pushing
 
 - **Alternatives Considered**:
   | Contender | Why Not Chosen |
