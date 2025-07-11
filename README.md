@@ -6,7 +6,10 @@ This pipeline ingests clickstream data from Elasticsearch, processes it in real 
 
 ## Pipeline Overview
 
-Elasticsearch → Custom Producer → Kinesis Data Streams → Kinesis Data Analytics (Flink) → Redis (Lookup) → Kinesis Data Streams (Enriched) → Lambda → ML REST API → DynamoDB
+Elasticsearch → Data Ingestion → Kinesis Data Streams → Stream Processing → Enrichment/Cache → Queue → ML API → Storage
+
+![Image](https://github.com/pkrishna1801/system-design/blob/93476353ee59679d861958881ae219b6f49ffb27/image%20(4).png)
+
 
 CloudWatch is used throughout the pipeline for monitoring and alerting on all critical components to ensure system reliability and performance.
 
@@ -62,13 +65,13 @@ Leaves enough headroom within the 100ms budget.
 
 - **CloudWatch** is configured to monitor:
 
-  - Kafka consumer lag
-  - Kafka Streams exception rates
-  - Redis latency and availability
+  - Kinesis iterator age, shard health
+  - Lambda duration, error rate, and throttles
+  - Redis connection failures or latency spikes
   - API error rates and latencies
   - DynamoDB throttles or capacity issues
 
-- **DLQ (Dead Letter Queue)** handles malformed or failed records coming out of Kafka Streams for later inspection.
+- **DLQ (Dead Letter Queue)** can be implemented at Flink, Lambda, and DynamoDB stages using Kinesis error streams, SQS queues, or S3 for failed record capture and replay.
 
 - If Redis is temporarily unavailable, Kafka Streams can either fall back to cached data or flag the record for retry or DLQ.
 
