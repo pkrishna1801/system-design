@@ -62,7 +62,7 @@ object Main {
 - **Low Latency**: 
   - Uses `jsoniter-scala` which compiles codecs at runtime for high-speed JSON parsing (10–50x faster than traditional parsers like Jackson).
   - Avoids object-mapping overhead by directly parsing to case classes.
-  - Minimal garbage generation = less GC pressure.
+  - Minimal garbage generation.
 
 **Note**: Scala is chosen for its high-performance capabilities in data parsing, making it one of the fastest languages for this task.
 
@@ -94,7 +94,7 @@ This pipeline ingests clickstream data from Elasticsearch, processes it in real 
 
 ## Pipeline Overview
 
-Elasticsearch → Data Ingestion → Kinesis Data Streams → Stream Processing → Enrichment/Cache → Queue → ML API → Storage
+Elasticsearch → Data Ingestion → Kinesis Data Streams → Stream Processing → Aux data lookup → Queue → ML API → Storage
 
 
 ![Pipeline](image%20(4).png)
@@ -230,7 +230,7 @@ You’ve trained a delivery-date prediction model in a Jupyter notebook. Describ
 
 ### Considered Alternative: Amazon SageMaker
 
-SageMaker is not ideal for this use case due to:
+SageMaker is not considered due to:
 - Limited customization, making Python frameworks like FastAPI a better choice for adding preprocessing or validation.
 - High costs for continuous, lightweight predictions; containerized APIs (ECS Fargate, EC2, Azure App Services) offer better cost-performance.
 - Tight integration with AWS-specific tools (e.g., Model Registry, Pipelines), limiting portability with tools like MLflow or DVC.
