@@ -1,180 +1,130 @@
+# Real-Time AWS Data Pipeline for Clickstream Processing
 
-# Real-Time AWS Data Pipeline for Clickstream ML Inference
-
-##  Problem Statement
-
-Design a **real-time, low-latency data pipeline** that:
-
-- Ingests **clickstream data from Elasticsearch**
-- Processes and extracts **model-ready features** (e.g., `hour_of_day`, `zip → income`)
-- Sends them to an **ML model hosted behind a REST API**
-- Maintains **latency under 100ms**
-- Supports **failure monitoring and recovery**
-- Is built entirely using **AWS-native or AWS-compatible services**
+This pipeline ingests clickstream data from Elasticsearch, processes it in real time, and sends model-ready features to an ML model hosted behind a REST API. It’s optimized for sub-100ms latency for an assumed traffic of 50k events per second.
 
 ---
 
-## Architecture
+## Pipeline Overview
 
-```
-[Elasticsearch]
-      ↓
-[Logstash]
-      ↓
-[Amazon MSK (Kafka)]
-      ↓
-[Kafka Streams (Feature Engineering)]
-      ↓
-[Redis (Aux Lookup / Feature Store)]
-      ↓
-[ML Model (REST API: SageMaker / ECS / Fargate)]
+Elasticsearch → Custom Producer → Kinesis Data Streams → Kinesis Data Analytics (Flink) → Redis (Lookup) → Kinesis Data Streams (Enriched) → Lambda → ML REST API → DynamoDB
 
-Optional:
-      ↓
-[DynamoDB + DAX or S3 + Athena for persistent storage]
-```
+CloudWatch monitors Kafka, Kafka Streams, Redis, API, and DynamoDB. A Dead Letter Queue is used to handle failed or malformed events.
 
 ---
 
-## Component-by-Component Breakdown
+##  Component Breakdown
 
-### 1. **Ingestion: Elasticsearch → Logstash**
+###  Elasticsearch → Custom Producer
+The custom producer extracts structured clickstream data from Elasticsearch and provides better control than Logstash for high-throughput pipelines. It Supports JSON normalization, timestamp adjustments, and schema validation before sending to Kinesis
 
-- **Chosen**: **Logstash**
-- **Why**:
-  - Native plugin support for **Elasticsearch input** and **Kafka output**
-  - Low-setup, reliable batch-to-stream converter
+###  Custom Producer → Kinesis Data Streams
+* Kinesis handles real-time, durable, ordered ingestion at massive scale.
+* Elastic scaling and enhanced fan-out (EFO) support ensures low-latency delivery to consumers.
 
-- **Alternatives Considered**:
-  | Contender | Why Not Chosen |
-  |-----------|----------------|
-  | Fluent Bit | Lighter, but less robust support for Kafka output and transformation logic |
-  | Custom ETL Script | Increases engineering overhead; not reliable for large-scale ingestion |
+Approx latency: 5–10ms.
 
----
+### Kinesis Data Analytics (Flink)
 
-### 2. **Buffering & Stream Transport: Amazon MSK (Kafka)**
+* Apache Flink runs within Kinesis Analytics to compute features:
 
-- **Chosen**: **Amazon MSK (Managed Kafka)**
-- **Why**:
-  - Industry-standard for **high-throughput, durable stream transport**
-  - Allows message replays, partitioning, strong order guarantees
-  - Seamlessly integrates with **Kafka Streams** for downstream processing
+* Time-of-day, day-of-week
 
-- **Alternatives Considered**:
-  | Contender | Why Not Chosen |
-  |-----------|----------------|
-  | **Kinesis** | Good for real-time ingestion, but limited processing capabilities and replay options; Kafka is better for stream + processing pipeline |
-  | **SQS** | Meant for simple queuing, not high-throughput pipelines |
-  | **EventBridge** | Not suitable for large data volume or processing |
+* Session-based aggregations
 
----
+* Joins with static data (e.g., IP geolocation, zip code)
 
-### 3. **Feature Engineering: Kafka Streams**
+* Stateless and stateful operations supported.
 
-- **Chosen**: **Kafka Streams**
-- **Why**:
-  - Native support for **event-time processing**, **joins**, and **windowing**
-  - Handles **stateful joins** for auxiliary data (e.g., ZIP → income)
-  - Scales horizontally, no cold-starts, and fault-tolerant
-  - In-place integration with MSK, no extra setup
+* Output written to a second enriched Kinesis stream.
 
-- **Alternatives Considered**:
-  | Contender | Why Not Chosen |
-  |-----------|----------------|
-  | **AWS Lambda (Go)** | Fast for stateless transforms, but not built for **stateful joins** and high-throughput streaming (cold start, concurrency limits) |
-  | **AWS Flink (KDA)** | Also strong, but adds operational complexity unless Flink team expertise exists |
-  | **Step Functions** | More suitable for orchestrated pipelines, not real-time event processing |
+### Redis (Lookup)
 
----
+Flink pulls reference/auxiliary data from Redis during stream processing (e.g., metadata per zip code).
 
-### 4. **Feature Store / Auxiliary Lookup: Redis**
+High-speed in-memory lookups ensure <5ms latency.
 
-- **Chosen**: **Redis (AWS ElastiCache)**
-- **Why**:
-  - Ultra-low latency in-memory store (sub-millisecond)
-  - Excellent for **ZIP code-based lookups**, region info, or session state
-  - Can double as a **lightweight feature store** if needed
+Keeps Flink stateless and lean.
 
-- **Alternatives Considered**:
-  | Contender | Why Not Chosen |
-  |-----------|----------------|
-  | **DynamoDB** | Slower than Redis for real-time lookups (2–10ms typical), but better for persistence |
-  | **Aurora/RDS** | Latency too high; not designed for sub-ms lookups or key-value patterns |
+### Kinesis (Enriched) → Lambda
+Lambda processes enriched records in batches
+Performs:
+
+Record validation
+
+JSON transformation for the ML model
+
+API request assembly
+
+### ML REST API
+
+###  Predictions → DynamoDB
+Stores:
+
+Prediction
+
+Enriched features
+
+Timestamps, metadata
+
+Chosen for:
+
+High write throughput
+
+Single-digit ms reads
+
+TTL support for data expiry
+
+Predictions and metadata are stored in DynamoDB for durability and downstream usage. It scales well with write-heavy workloads and provides fast querying capabilities. S3 was considered but is better suited for batch storage or archival purposes.
 
 ---
 
-### 5. **Model Inference: ML REST API**
+## Latency Estimates
 
-- **Chosen**: **REST API hosted on SageMaker Endpoint / ECS / Lambda**
-- **Why**:
-  - Supports any ML framework
-  - REST interface allows easy versioning, load balancing, monitoring
-  - Deployable on scalable infrastructure (Fargate, ECS, SageMaker)
+| Step                          | Approx Latency |
+| ----------------------------- | -------------- |
+| Custom Producer → Kinesis     | \~5–10ms       |
+| Kinesis → Flink               | \~10–20ms      |
+| Redis lookup within Flink     | \~5ms          |
+| Kinesis (Enriched) → Lambda   | \~5ms          |
+| Lambda → ML API (batch)       | \~50ms         |
+| API response → DynamoDB write | \~10ms         |
+| **Total**                     | **\~85–95ms**  |
 
-- **Alternatives Considered**:
-  | Contender | Why Not Chosen |
-  |-----------|----------------|
-  | **gRPC Endpoint** | Faster than REST but not as widely supported or easy to integrate across tools |
-  | **Batch Inference** | Doesn’t meet real-time latency goal |
-  | **Streaming via WebSocket** | Adds complexity without strong benefit here |
 
----
-
-### 6. **Optional: Persistent Storage**
-
-- **Chosen Options**:
-  - **DynamoDB + DAX**: For real-time persistent key-value access
-  - **S3 + Athena**: For batch analytics, dashboards, retraining datasets
-
-- **Why**:
-  - **DAX** accelerates DynamoDB to near-Redis speeds for auxiliary or fallback lookups
-  - **S3 + Athena** supports SQL-like analytics for audit, BI, and model evaluation
-
-- **Alternatives Considered**:
-  | Contender | Why Not Chosen |
-  |-----------|----------------|
-  | **Redshift** | Good for analytics but slower, and overkill for real-time lookup |
-  | **RDS** | Higher operational complexity and slower than S3/Athena for large-scale batch analysis |
+Leaves enough headroom within the 100ms budget.
 
 ---
 
-### 7. **Monitoring and Failure Handling**
+##  Monitoring and Failure Handling
 
-- **Chosen**:
-  - **CloudWatch**: Logs, metrics, alarms
-  - **DLQ (Kafka Dead Letter Topic or SQS)**: For failed event capture
+- **CloudWatch** is configured to monitor:
 
-- **Why**:
-  - **CloudWatch** supports custom metrics from Kafka Streams, Lambda, Redis, etc.
-  - **DLQs** prevent message loss and support retries/debugging
+  - Kafka consumer lag
+  - Kafka Streams exception rates
+  - Redis latency and availability
+  - API error rates and latencies
+  - DynamoDB throttles or capacity issues
 
-- **Fallback Strategy**:
-  - Retry policy with backoff
-  - Auto-scaling inference layer (ECS/Fargate/SageMaker)
+- **DLQ (Dead Letter Queue)** handles malformed or failed records coming out of Kafka Streams for later inspection.
 
----
-
-## How This Architecture Ensures <100ms Latency
-
-| Component            | Est. Latency | Optimization Notes |
-|---------------------|--------------|--------------------|
-| Logstash → Kafka    | 10–30 ms     | Small batch size and flush interval |
-| Kafka Streams        | 5–20 ms      | Stateful map/filter/join in-memory |
-| Redis Lookup         | <1 ms        | Auxiliary lookup sub-millisecond |
-| ML REST Inference    | 30–50 ms     | Use compiled model (e.g., TorchScript) and load balancer |
-
-> Total End-to-End: ~50–90ms under typical load
+- If Redis is temporarily unavailable, Kafka Streams can either fall back to cached data or flag the record for retry or DLQ.
 
 ---
 
-## Summary: Why This Setup
+## Alternatives Considered
 
-| Need | Solution | Justification |
-|------|----------|---------------|
-| High-throughput ingestion | Logstash + MSK | Elastic → Kafka is reliable, scalable |
-| Real-time processing | Kafka Streams | Stateful + streaming + join support |
-| Fast feature lookup | Redis | Sub-millisecond in-memory access |
-| Inference | REST API | Framework-agnostic, scalable |
-| Monitoring | CloudWatch + DLQ | End-to-end observability and recovery |
-| Persistent storage | DynamoDB/DAX or S3 | Optional offline analytics and training |
+| Component    | Used                 | Alternatives          | Rationale                                                                                   |
+| ------------ | -------------------- | --------------------- | ------------------------------------------------------------------------------------------- |
+| Ingestion    | Kinesis Data Streams | MSK (Kafka), SQS      | Kinesis is AWS-native, serverless, and easily scales with EFO for low latency               |
+| Processing   | Flink on KDA         | Lambda, Kafka Streams | Flink handles stateful streaming + joins better than Lambda; no need for self-managed Kafka |
+| Lookup Store | Redis                | DynamoDB              | Redis provides in-memory lookup performance critical for sub-100ms latency                  |
+| Inference    | REST API (FastAPI)   | SageMaker Batch       | REST gives low-latency response; SageMaker batch adds delay and is better for async jobs    |
+| Storage      | DynamoDB             | S3, Aurora            | DynamoDB offers single-digit ms write latency and scales easily                             |
+
+---
+
+##  Summary
+
+This setup uses Kafka as the streaming backbone, Kafka Streams for feature generation and enrichment, Redis for fast auxiliary data access, and DynamoDB for result storage. Keeping Redis out of the prediction path improves reliability and reduces latency, while CloudWatch and a DLQ ensure visibility into failures.
+
+The system is horizontally scalable, low-latency, and production-ready under real-time constraints.
