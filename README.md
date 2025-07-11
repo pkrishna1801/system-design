@@ -8,71 +8,34 @@ This pipeline ingests clickstream data from Elasticsearch, processes it in real 
 
 Elasticsearch → Custom Producer → Kinesis Data Streams → Kinesis Data Analytics (Flink) → Redis (Lookup) → Kinesis Data Streams (Enriched) → Lambda → ML REST API → DynamoDB
 
-CloudWatch monitors Kafka, Kafka Streams, Redis, API, and DynamoDB. A Dead Letter Queue is used to handle failed or malformed events.
+CloudWatch is used throughout the pipeline for monitoring and alerting on all critical components to ensure system reliability and performance.
+
 
 ---
 
 ##  Component Breakdown
 
 ###  Elasticsearch → Custom Producer
-The custom producer extracts structured clickstream data from Elasticsearch and provides better control than Logstash for high-throughput pipelines. It Supports JSON normalization, timestamp adjustments, and schema validation before sending to Kinesis
+ A custom producer is used to extract data from Elasticsearch in real time. Unlike Logstash, which is more generic, this custom producer offers greater flexibility for high-throughput scenarios. It Supports JSON normalization, timestamp adjustments, and schema validation before sending to Kinesis
 
 ###  Custom Producer → Kinesis Data Streams
-* Kinesis handles real-time, durable, ordered ingestion at massive scale.
-* Elastic scaling and enhanced fan-out (EFO) support ensures low-latency delivery to consumers.
-
-Approx latency: 5–10ms.
+a fully managed and horizontally scalable stream ingestion service. Kinesis is responsible for ingesting and distributing the data in real time. It supports enhanced fan-out (EFO), which allows consumers like Flink to receive data with low latency and high throughput. This step serves as the primary ingestion buffer, providing ordering guarantees, durability, and built-in integration with downstream AWS analytics services.
 
 ### Kinesis Data Analytics (Flink)
 
-* Apache Flink runs within Kinesis Analytics to compute features:
-
-* Time-of-day, day-of-week
-
-* Session-based aggregations
-
-* Joins with static data (e.g., IP geolocation, zip code)
-
-* Stateless and stateful operations supported.
-
-* Output written to a second enriched Kinesis stream.
+ingested data is then consumed by Kinesis Data Analytics, where Apache Flink jobs perform real-time processing. Flink is used here to extract and compute features such as hour of the day, day of the week, and session duration. It also handles event enrichment using metadata such as zip-code-based location or behavioral tags. The advantage of using Flink over Lambda or Kafka Streams lies in its powerful support for both stateless and stateful stream transformations, windowing, and dynamic joins. This allows the pipeline to remain responsive and accurate even under evolving data conditions.
 
 ### Redis (Lookup)
 
-Flink pulls reference/auxiliary data from Redis during stream processing (e.g., metadata per zip code).
-
-High-speed in-memory lookups ensure <5ms latency.
-
-Keeps Flink stateless and lean.
+During stream processing in Flink, auxiliary data such as zip-code-to-region mappings or customer segments is fetched from Redis. Redis is chosen for its sub-millisecond response time, allowing Flink to perform lookups without compromising throughput or latency. Rather than persisting feature data in Redis, the system treats it purely as a fast, in-memory lookup table. This approach helps minimize state management within Flink
 
 ### Kinesis (Enriched) → Lambda
-Lambda processes enriched records in batches
-Performs:
-
-Record validation
-
-JSON transformation for the ML model
-
-API request assembly
+he processed events are written to a second Kinesis stream and consumed by an AWS Lambda function. Lambda is configured with batch processing enabled, which allows it to process groups of records efficiently. Within Lambda, additional tasks such as schema validation, field filtering, and transformation into the ML API’s input format are performed. It also handles retries, error logging, and asynchronous communication with the ML inference endpoint.
 
 ### ML REST API
 
 ###  Predictions → DynamoDB
-Stores:
-
-Prediction
-
-Enriched features
-
-Timestamps, metadata
-
-Chosen for:
-
-High write throughput
-
-Single-digit ms reads
-
-TTL support for data expiry
+Finally, the output from the ML API, including predictions and associated metadata, is written to DynamoDB. DynamoDB is selected for its ability to handle high write volumes with single-digit millisecond latency. It supports partitioning and indexing for efficient querying
 
 Predictions and metadata are stored in DynamoDB for durability and downstream usage. It scales well with write-heavy workloads and provides fast querying capabilities. S3 was considered but is better suited for batch storage or archival purposes.
 
