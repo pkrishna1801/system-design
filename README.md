@@ -92,6 +92,6 @@ Leaves enough headroom within the 100ms budget.
 
 ##  Summary
 
-This setup uses Kafka as the streaming backbone, Kafka Streams for feature generation and enrichment, Redis for fast auxiliary data access, and DynamoDB for result storage. Keeping Redis out of the prediction path improves reliability and reduces latency, while CloudWatch and a DLQ ensure visibility into failures.
+This real-time, AWS-native architecture processes high-throughput clickstream data from Elasticsearch, enriches it with auxiliary data, performs fast inference, and logs results—all within ~90ms. It combines Kinesis, Flink, Redis, and Lambda for streaming, and uses DynamoDB for fast persistence. CloudWatch ensures visibility, while Redis lookups and batch Lambda processing help stay well within latency budgets.
 
-The system is horizontally scalable, low-latency, and production-ready under real-time constraints.
+The system is scalable, low-latency, and fault-tolerant, ready for production workloads up to 50,000 events/sec and beyond
