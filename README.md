@@ -1,5 +1,92 @@
-# Real-Time AWS Data Pipeline for Clickstream Processing
+# Data Engineering, System Design, and ML Ops
 
+## 1. Python + Data Engineering (Applied)
+
+### Goal: Assess core data transformation skills. Use programming language of your choice for each part, applied to the sample data shared.
+
+### Q1: Elasticsearch JSON Logs Processing
+
+You receive JSON logs from an Elasticsearch stream. Implement the following:
+
+- **Write a scalable (for volume) function** to read and parse the logs, extracting the `request timestamp` from the `createdDateTime`.
+- **Create a function that generates model-ready features** (`day_of_year`, `day_of_week`, `hour_of_day`) for:
+  - Model training (large volume of data processing, possibly millions of entries)
+  - Real-time model inference with a focus on latency reduction
+
+---
+## Solution:
+```scala
+import java.nio.file.{Files, Paths}
+import java.time.{Instant, ZoneId, ZonedDateTime}
+import com.github.plokhotnyuk.jsoniter_scala.core._
+import com.github.plokhotnyuk.jsoniter_scala.macros._
+
+case class Source(createdDateTime: Long)
+case class IndexRecord(_index: String, _source: Source)
+case class TimeFeatures(dayOfYear: Int, dayOfWeek: Int, hourOfDay: Int)
+
+object RealTimeJsonParser {
+  implicit val sourceCodec: JsonValueCodec[Source] = JsonCodecMaker.make
+  implicit val indexRecordCodec: JsonValueCodec[IndexRecord] = JsonCodecMaker.make
+  implicit val indexRecordArrayCodec: JsonValueCodec[Array[IndexRecord]] = JsonCodecMaker.make
+
+  def extractTimeFeatures(epochMillis: Long): TimeFeatures = {
+    val instant = Instant.ofEpochMilli(epochMillis)
+    val zdt = ZonedDateTime.ofInstant(instant, ZoneId.of("UTC"))
+    TimeFeatures(
+      dayOfYear = zdt.getDayOfYear,
+      dayOfWeek = zdt.getDayOfWeek.getValue,
+      hourOfDay = zdt.getHour
+    )
+  }
+}
+
+object Main {
+  def main(args: Array[String]): Unit = {
+    val inputJson = Files.readAllBytes(Paths.get("sample_sessions.json"))
+
+    import RealTimeJsonParser._
+
+    val records = readFromArray[Array[IndexRecord]](inputJson)
+
+    records.foreach { rec =>
+      val features = extractTimeFeatures(rec._source.createdDateTime)
+      println(s"Extracted Features: $features")
+    }
+  }
+}
+```
+### Scalability & Latency Considerations
+
+- **Scalability**: Designed using stateless pure functions, can be integrated with Akka Streams or Flink for distributed ingestion.
+- **Low Latency**: 
+  - Uses `jsoniter-scala` which compiles codecs at runtime for high-speed JSON parsing (10–50x faster than traditional parsers like Jackson).
+  - Avoids object-mapping overhead by directly parsing to case classes.
+  - Minimal garbage generation = less GC pressure.
+
+**Note**: Scala is chosen for its high-performance capabilities in data parsing, making it one of the fastest languages for this task.
+
+
+## 2. System Design: Data Pipeline Architecture (Theoretical)
+
+### Goal: Test your ability to design a robust data ingestion and serving system.
+
+### Q2: Real-Time Data Pipeline Design for Clickstream Data
+
+Design a real-time AWS-built data pipeline that:
+- Ingests clickstream data from Elasticsearch
+- Processes it
+- Sends model-ready features to an ML model hosted behind a REST API
+
+**Draw the architecture and explain:**
+- Technologies used
+- How you ensure latency < 100ms using features such as time of day, day of week, zip code of the request, aux data merged in based on zip code
+- How you monitor failures
+
+---
+
+## Solution Design
+### Real-Time AWS Data Pipeline for Clickstream Processing
 This pipeline ingests clickstream data from Elasticsearch, processes it in real time, and sends model-ready features to an ML model hosted behind a REST API. It’s optimized for sub-100ms latency for an assumed traffic of 50k events per second.
 
 ---
@@ -93,3 +180,59 @@ Predictions and metadata are stored in DynamoDB for durability and downstream us
 This real-time, AWS-native architecture processes high-throughput clickstream data from Elasticsearch, enriches it with auxiliary data, performs fast inference, and logs results—all within ~90ms. It combines Kinesis, Flink, Redis, and Lambda for streaming, and uses DynamoDB for fast persistence. CloudWatch ensures visibility, while Redis lookups and batch Lambda processing help stay well within latency budgets.
 
 The system is scalable, low-latency, and fault-tolerant, ready for production workloads up to 50,000 events/sec and beyond
+
+
+# 3. ML Ops + Deployment (Theoretical)
+
+### Goal: Evaluate deployment and ops strategy for ML services.
+
+### Q3: Deploying Delivery-Date Prediction Model as API
+
+You’ve trained a delivery-date prediction model in a Jupyter notebook. Describe the process of converting this model into a production API and implementing monitoring and versioning.
+
+**Describe how you would:**
+- Convert this into a production API (include tech stack)
+- Monitor predictions and model drift
+- Enable rollback and versioning
+
+
+## Solution:
+
+### Steps to Convert the Model into a Production-Ready API
+
+![Pipeline](MLOPS.png)
+
+1. the first step is to modularize the notebook code into reusable Python scripts, separating components like data preprocessing, model training, and inference.
+2. FastAPI is an ideal choice for building the API due to its asynchronous capabilities and high performance.
+3. The trained model should be logged, versioned, and packaged using MLflow, which also allows storing parameters, metrics, artifacts, and environments in a centralized model registry.
+4. To load the correct version of the model during inference, the model can be dynamically retrieved using mlflow.metadata, which ensures compatibility and traceability.
+5. To containerize the application, Docker can be used to bundle the code, model, and all dependencies. Separate environment setups should be maintained for development, staging, and production to isolate testing and deployment workflows.
+6. For deployment,
+   - a. Containerized Application can be hosted on Kubernetes cluster (EKS). This allows for easy scaling, management, and orchestration of the containers and can be hosted on cloud platforms like AWS or Azure.
+   - b. An Application Load Balancer can be used route traffic to Kubernetes clusters efficiently and support auto-scaling, load balancing, and SSL termination.
+   - c. Infrastructure provisioning and configuration can be managed using Terraform to ensure consistency and scalability across environments.
+7. CI/CD pipelines, configured via GitHub Actions, should automate the build, test, and deployment process. These pipelines must include unit tests and integration tests to catch errors early and verify the functionality of the system before deployment.
+8. Monitoring tools like AWS CloudWatch or Prometheus should be integrated to track API health, latency, and errors. Logs should be aggregated using tools like Fluentd or ELK stack for debugging and observability.
+
+### Model Monitoring and Drift Detection
+
+1. MLflow’s experiment tracking can be used to log all inputs, outputs, and model performance metrics such as MAE or RMSE.
+2. In addition to MLflow, system-level monitoring can be implemented using tools like AWS CloudWatch or Azure Monitor to track service health, latency, and error rates.
+3. Model drift detection can be done by comparing the distribution of incoming prediction data with training data using statistical metrics like Population Stability Index, or by monitoring performance degradation over time. Also we can write custom drift detection code (e.g., PSI) and log metrics to MLflow.
+4. Alerts can be configured to notify the team if performance metrics deviate beyond thresholds, helping ensure model reliability in real-time usage.
+
+### Rollback and Versioning Support
+
+1. MLflow’s Model Registry can be used to manage multiple versions of the trained model, allowing promotion of a model to “Staging” or “Production” and easy rollback to any previous version.
+2. Data and pipeline versioning can be handled using DVC, which tracks datasets and transformation scripts, enabling full reproducibility of any model training run.
+3. All code changes can be maintained in a Git repository with release tags, and CI/CD pipelines can be configured to automate deployments, rollback procedures, and environment provisioning.
+
+### Considered Alternative: Amazon SageMaker
+
+SageMaker is not ideal for this use case due to:
+- Limited customization, making Python frameworks like FastAPI a better choice for adding preprocessing or validation.
+- High costs for continuous, lightweight predictions; containerized APIs (ECS Fargate, EC2, Azure App Services) offer better cost-performance.
+- Tight integration with AWS-specific tools (e.g., Model Registry, Pipelines), limiting portability with tools like MLflow or DVC.
+- Unpredictable cold start times and latency, which may violate SLA or real-time inference requirements.
+
+SageMaker is better suited for large-scale training, A/B testing, or managed autoscaling with hundreds of models.
