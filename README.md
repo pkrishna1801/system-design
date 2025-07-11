@@ -60,7 +60,7 @@ object Main {
 
 - **Scalability**: Designed using stateless pure functions, can be integrated with Akka Streams or Flink for distributed ingestion.
 - **Low Latency**: 
-  - Uses `jsoniter-scala` which compiles codecs at runtime for high-speed JSON parsing (10–50x faster than traditional parsers like Jackson).
+  - Used `jsoniter-scala` which compiles codecs at runtime for high-speed JSON parsing (10–50x faster than traditional parsers like Jackson).
   - Avoids object-mapping overhead by directly parsing to case classes.
   - Minimal garbage generation.
 
