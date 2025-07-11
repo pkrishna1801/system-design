@@ -8,7 +8,8 @@ This pipeline ingests clickstream data from Elasticsearch, processes it in real 
 
 Elasticsearch → Data Ingestion → Kinesis Data Streams → Stream Processing → Enrichment/Cache → Queue → ML API → Storage
 
-![Image](https://github.com/pkrishna1801/system-design/blob/93476353ee59679d861958881ae219b6f49ffb27/image%20(4).png)
+
+![Pipeline](image%20(4).png)
 
 
 CloudWatch is used throughout the pipeline for monitoring and alerting on all critical components to ensure system reliability and performance.
