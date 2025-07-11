@@ -66,6 +66,7 @@ object Main {
 
 **Note**: Scala is chosen for its high-performance capabilities in data parsing, making it one of the fastest languages for this task.
 
+[Click here](https://github.com/pkrishna1801/jsonlog-parser) for the Git repository.
 
 ## 2. System Design: Data Pipeline Architecture (Theoretical)
 
