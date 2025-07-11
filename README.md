@@ -64,7 +64,7 @@ object Main {
   - Avoided object-mapping overhead by directly parsing to case classes.
   - Minimal garbage generation.
 
-**Note**: Scala is chosen for its high-performance capabilities in data parsing, making it one of the fastest languages for this task.
+**Note**: Scala has been selected due to its superior performance in data parsing, making it an ideal choice for handling large volumes of data efficiently.
 
 [Click here](https://github.com/pkrishna1801/jsonlog-parser) for the Git repository.
 
