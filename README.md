@@ -89,20 +89,114 @@ Design a real-time AWS-built data pipeline that:
 
 ## Solution Design
 ### Real-Time AWS Data Pipeline for Clickstream Processing
-This pipeline ingests clickstream data from Elasticsearch, processes it in real time, and sends model-ready features to an ML model hosted behind a REST API. It’s optimized for sub-100ms latency for an assumed traffic of 50k events per second.
+This pipeline ingests clickstream data from Elasticsearch, processes it in real time, and sends model-ready features to an ML model hosted behind a REST API. It’s optimized for sub-100ms latency for an assumed traffic of 10k+ events per second.
+
+---
+## 1. Functional Requirements
+- Ingest clickstream data from **Elasticsearch**
+- Perform light enrichment:
+  - Time of day
+  - Day of week
+  - ZIP-based auxiliary data merge
+- Call an **ML model hosted behind a REST API**
 
 ---
 
-## Pipeline Overview
+## 2. Non-Functional Requirements
+- **Latency**: <100ms from ingestion to model response
+- **Availability**: 99.9%+
+- **Durability**: Don’t lose data on failure
+- **Scalability**: Handle up to 10K events/sec
+- **Monitoring**: Detect processing failures and slowdowns
+
+---
+
+## 3. Assumptions
+
+| Metric        | Value           |
+|---------------|-----------------|
+| Record size   | 10 KB           |
+| Event rate    | 10,000 events/s |
+
+---
+
+## 4. High-Level Architecture
+
+
+## Lambda Architecture Overview
+---
+![Pipeline](Lambda%20Architecture.png)
+
+### Components
+
+### a. Clickstream Source (Elasticsearch)
+User click events are initially indexed in Elasticsearch. These events represent raw user interactions that need to be processed in real time. A **custom producer application** actively monitors this OpenSearch cluster and detects new clickstream entries as they arrive. Once identified, it pushes these events into the streaming pipeline for further processing.
+
+### b. Streaming Ingestion (Amazon Kinesis Data Streams)
+Amazon Kinesis Data Streams serves as the real-time ingestion layer for this architecture. It is a fully managed, durable stream processing service capable of handling high event volumes. The custom producer sends each click event into a Kinesis stream. To achieve low latency, the stream is configured with **Enhanced Fan-Out (EFO)**, which allows multiple consumers (like Lambda functions) to receive data with **millisecond-level latency**, independent of other consumers.
+
+### c. Stream Processing (AWS Lambda)
+AWS Lambda is used to process each incoming event in a **stateless and per-record fashion**. Subscribed to Kinesis via its native integration, each Lambda function is triggered in near real-time as new data arrives. 
+Within the function, 
+- Performs **per-record enrichment and transformation**:
+  - Compute "time of day" and "day of week" from timestamp.
+  - Extract ZIP code.
+  - **Lookup auxiliary data** from Redis using ZIP code.
+  - Compile model-ready features.
+  - **Asynchronously call ML REST API**.
+  - On failure: send event to **SQS Dead Letter Queue (DLQ)**.
+
+### d. Low-Latency Cache (Amazon ElastiCache - Redis)
+To support rapid enrichment within the Lambda function, **Amazon ElastiCache for Redis** is employed as the auxiliary data store. Redis provides **microsecond response times** and ensures that ZIP code–based lookups are efficient and do not become a bottleneck in the pipeline. By storing all auxiliary metadata in-memory and keyed by ZIP codes or other identifiers, Redis eliminates the need for slow, repeated queries to external databases, keeping the total pipeline latency under the required 100ms.
+
+
+---
+## Latency Estimates
+
+| Step                          | Approx Latency |
+| ----------------------------- | -------------- |
+| Custom Producer → Kinesis     | \~5ms          |
+| Kinesis → Flink               | \~70ms         |
+| Lambda +redis → ML API (batch)| \~20ms         |
+| **Total**                     | **\~95-100ms**  |
+
+--- 
+## 6. Performance Metrics
+
+| Metric                | Value              |
+|-----------------------|--------------------|
+| Record size           | 10 KB              |
+| Event rate            | 10,000 events/sec  |
+| Total throughput      | 100 MB/sec         |
+| Shards required       | 100 shards         |
+| EFO enabled           | Yes                |
+| Parallelization Factor| 10 (max per shard) |
+| Lambdas required      | ~300               |
+| Lambda runtime        | ~30 ms             |
+| Spare headroom        | ~70%               |
+
+---
+
+## 7. Monitoring and Observability
+- **CloudWatch Metrics**:
+  - Task completion rate
+  - ML API errors
+  - Event drop rate
+  - DLQ size
+
+---
+
+
+
+## Flink Architecture Overview
 
 Elasticsearch → Data Ingestion → Kinesis Data Streams → Stream Processing → Aux data lookup → Queue → ML API → Storage
 
 
-![Pipeline](image%20(4).png)
+![Pipeline](Flink%20Architecture.png)
 
 
 CloudWatch is used throughout the pipeline for monitoring and alerting on all critical components to ensure system reliability and performance.
-
 
 ---
 
@@ -138,13 +232,12 @@ Predictions and metadata are stored in DynamoDB for durability and downstream us
 
 | Step                          | Approx Latency |
 | ----------------------------- | -------------- |
-| Custom Producer → Kinesis     | \~5–10ms       |
-| Kinesis → Flink               | \~10–20ms      |
-| Redis lookup within Flink     | \~5ms          |
-| Kinesis (Enriched) → Lambda   | \~5ms          |
-| Lambda → ML API (batch)       | \~50ms         |
-| API response → DynamoDB write | \~10ms         |
-| **Total**                     | **\~85–95ms**  |
+| Custom Producer → Kinesis     | \~5ms       |
+| Kinesis → Flink               | \~70ms      |
+| Redis lookup within Flink     | \~15ms          |
+| Kinesis (Enriched) → Lambda   | \~70ms          |
+| Lambda → ML API (batch)       | \~20ms         |
+| **Total**                     | **\~140-160ms**  |
 
 
 ---
@@ -177,11 +270,6 @@ Predictions and metadata are stored in DynamoDB for durability and downstream us
 
 ---
 
-##  Summary
-
-This real-time, AWS-native architecture processes high-throughput clickstream data from Elasticsearch, enriches it with auxiliary data, performs fast inference, and logs results—all within ~90ms. It combines Kinesis, Flink, Redis, and Lambda for streaming, and uses DynamoDB for fast persistence. CloudWatch ensures visibility, while Redis lookups and batch Lambda processing help stay well within latency budgets.
-
-The system is scalable, low-latency, and fault-tolerant, ready for production workloads up to 50,000 events/sec and beyond
 
 
 # 3. ML Ops + Deployment (Theoretical)
